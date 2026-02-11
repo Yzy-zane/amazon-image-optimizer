@@ -115,8 +115,57 @@ def format_product_description(product_info):
     return ". ".join(parts) + "."
 
 
+def _detect_product_context(product_info):
+    """
+    判断产品使用场景类型，决定 lifestyle prompt 方向。
+
+    返回:
+        "car_interior"  - 车内配件 (收纳箱、座套、手机支架等) → 放进车里展示
+        "car_exterior"  - 车外配件 (车贴、天线、雨刮等) → 装在车外展示
+        "display"       - 展示型产品 (车模、模型、收藏品等) → 桌面/展柜展示
+        "general"       - 通用产品 → 通用生活场景
+    """
+    text = " ".join([
+        product_info.get("name", ""),
+        product_info.get("category", ""),
+        " ".join(product_info.get("features", [])),
+        product_info.get("target_audience", ""),
+    ]).lower()
+
+    # 展示型/收藏型产品 (优先检测，因为 "car model" 也包含 "car")
+    display_keywords = [
+        "model", "模型", "die-cast", "diecast", "toy", "replica",
+        "collectible", "figurine", "scale", "1:18", "1:24", "1:43",
+        "decoration", "decor", "ornament", "display", "statue",
+    ]
+    if any(kw in text for kw in display_keywords):
+        return "display"
+
+    # 车内配件
+    interior_keywords = [
+        "organizer", "seat cover", "seat cushion", "phone holder", "mount",
+        "floor mat", "trunk", "storage", "console", "visor", "sunshade",
+        "charger", "dash cam", "air freshener", "steering wheel",
+        "armrest", "headrest", "cup holder", "trash can", "tissue",
+        "收纳", "座套", "坐垫", "脚垫", "遮阳",
+    ]
+    if any(kw in text for kw in interior_keywords):
+        return "car_interior"
+
+    # 车外配件
+    exterior_keywords = [
+        "decal", "sticker", "antenna", "wiper", "mirror", "light",
+        "bumper", "grille", "fender", "spoiler", "roof rack", "mud flap",
+        "车贴", "雨刮", "后视镜",
+    ]
+    if any(kw in text for kw in exterior_keywords):
+        return "car_exterior"
+
+    return "general"
+
+
 def _detect_vehicle_type(product_info):
-    """从产品信息推断车型，用于场景图选择合适的场景。"""
+    """从产品信息推断车型 (仅当产品确实是车内/车外配件时有意义)。"""
     text = " ".join([
         product_info.get("name", ""),
         product_info.get("category", ""),
@@ -180,19 +229,76 @@ def build_main_prompt(product_info):
 
 def build_lifestyle_prompt(product_info, scene_variant=1):
     """
-    场景图 — 产品在真实车内/使用场景
+    场景图 — 产品在真实使用/展示场景
 
-    v2 改进:
-    - 根据车型 (SUV/Sedan/Truck) 选择合适场景
-    - 强调空间比例准确，防止车内几何扭曲
-    - 增加负向指令防止常见 AI 错误
+    v3 修复:
+    - 先判断产品类型 (车内配件/展示品/通用)，再匹配对应场景
+    - 车模/模型 → 桌面/展柜展示场景，不会被塞进后备箱
+    - 车内配件 → 车内安装/使用场景
+    - 通用产品 → 通用生活场景
     """
     desc = format_product_description(product_info)
     name = product_info.get("name", "the product")
-    target = product_info.get("target_audience", "a car owner")
+    target = product_info.get("target_audience", "the customer")
+    context = _detect_product_context(product_info)
+
+    if context == "display":
+        scene, style_note, spatial_note = _build_display_scene(name, target, scene_variant)
+    elif context == "car_interior":
+        scene, style_note, spatial_note = _build_car_interior_scene(name, target, product_info, scene_variant)
+    elif context == "car_exterior":
+        scene, style_note, spatial_note = _build_car_exterior_scene(name, target, scene_variant)
+    else:
+        scene, style_note, spatial_note = _build_general_scene(name, target, product_info, scene_variant)
+
+    prompt = (
+        f"{desc}\n\n"
+        f"SCENE: {scene}\n\n"
+        f"{spatial_note}\n\n"
+        f"{TECH_SPEC}\n\n"
+        f"{NEGATIVE_GENERAL}\n\n"
+        f"Style: {style_note}"
+    )
+    return prompt
+
+
+def _build_display_scene(name, target, variant):
+    """展示型产品场景 (车模、模型、收藏品、装饰品)"""
+    scenes = {
+        1: (
+            f"A {name} displayed on a clean, dark wooden desk or shelf. "
+            "Soft warm side lighting from the left creates gentle highlights on the product surface. "
+            "Background: slightly blurred modern living room or study, bookshelves and warm decor visible. "
+            f"A person's hand ({target}) is reaching towards the product as if admiring it. "
+            "The product is the clear hero — it looks premium and collectible. "
+            "The scene evokes pride of ownership and aesthetic appreciation."
+        ),
+        2: (
+            f"A {name} placed on a glass display shelf or clean white surface. "
+            "Professional display lighting — a small spotlight from above creates a focused glow. "
+            "Background: a softly blurred collection or showroom setting. "
+            "The product catches the light beautifully, showing its details and finish. "
+            "The image conveys exclusivity, craftsmanship, and collector's value."
+        ),
+    }
+    scene = scenes.get(variant, scenes[1])
+    style = (
+        "High-end product lifestyle photography. Photorealistic, editorial quality. "
+        "The product is a collectible display piece shown on furniture or a display shelf. "
+        "This is a showcase scene in a home or showroom setting."
+    )
+    spatial = (
+        "IMPORTANT: This product is a display/collectible item. "
+        "Show it on a desk, shelf, or display surface in a home or showroom. "
+        "The product should be the focal point, beautifully lit and clearly visible."
+    )
+    return scene, style, spatial
+
+
+def _build_car_interior_scene(name, target, product_info, variant):
+    """车内配件场景 (收纳箱、座套、手机支架等)"""
     vehicle = _detect_vehicle_type(product_info)
 
-    # ---- SUV 场景 ----
     suv_scenes = {
         1: (
             f"{name} placed inside the spacious trunk of a modern SUV (like Honda CR-V or Toyota RAV4). "
@@ -207,12 +313,10 @@ def build_lifestyle_prompt(product_info, scene_variant=1):
             "The tailgate is open, showing the product perfectly fitted in the trunk space. "
             "Background: a tree-lined suburban street visible through the rear window. "
             "Late afternoon golden light streams in from behind. "
-            "The image suggests weekend family trips and outdoor adventures. "
-            "Everything looks tidy, premium, and well-planned."
+            "The image suggests weekend family trips and outdoor adventures."
         ),
     }
 
-    # ---- Truck 场景 ----
     truck_scenes = {
         1: (
             f"{name} in the rear seat area or extended cab storage of a pickup truck. "
@@ -229,7 +333,6 @@ def build_lifestyle_prompt(product_info, scene_variant=1):
         ),
     }
 
-    # ---- Sedan / 通用车型场景 ----
     sedan_scenes = {
         1: (
             f"{name} placed inside the trunk of a modern sedan (like Honda Accord or Toyota Camry). "
@@ -248,31 +351,80 @@ def build_lifestyle_prompt(product_info, scene_variant=1):
         ),
     }
 
-    scene_map = {
-        "SUV": suv_scenes,
-        "truck": truck_scenes,
-        "sedan": sedan_scenes,
-        "car": sedan_scenes,
-    }
+    scene_map = {"SUV": suv_scenes, "truck": truck_scenes, "sedan": sedan_scenes, "car": sedan_scenes}
     scenes = scene_map.get(vehicle, sedan_scenes)
-    scene = scenes.get(scene_variant, scenes[1])
+    scene = scenes.get(variant, scenes[1])
 
-    prompt = (
-        f"{desc}\n\n"
-        f"SCENE: {scene}\n\n"
-        f"{MARKETING_SCENE}\n\n"
-        "SPATIAL ACCURACY RULE: The vehicle interior dimensions must be physically correct "
-        "and proportional. The product must fit naturally in the space shown — "
-        "no impossible sizing, no distorted geometry. "
-        f"Vehicle type: {vehicle}.\n\n"
-        f"{TECH_SPEC}\n\n"
-        f"{NEGATIVE_GENERAL}\n"
-        f"{NEGATIVE_CAR_SCENE}\n\n"
-        "Style: High-end automotive lifestyle photography for Amazon listing. "
+    style = (
+        "High-end automotive lifestyle photography for Amazon listing. "
         "Photorealistic, editorial quality. This is NOT a white background studio shot — "
-        "it is an in-context lifestyle image."
+        "it is an in-context vehicle interior lifestyle image."
     )
-    return prompt
+    spatial = (
+        "SPATIAL ACCURACY RULE: The vehicle interior dimensions must be physically correct. "
+        "The product must fit naturally in the space — no impossible sizing, no distorted geometry. "
+        f"Vehicle type: {vehicle}.\n"
+        f"{NEGATIVE_CAR_SCENE}"
+    )
+    return scene, style, spatial
+
+
+def _build_car_exterior_scene(name, target, variant):
+    """车外配件场景 (车贴、天线、灯饰等)"""
+    scenes = {
+        1: (
+            f"A {name} installed on a clean, modern car in a well-lit parking area. "
+            f"A person ({target}) is standing nearby, admiring the installed product. "
+            "The car is clean and polished, shot from a 3/4 angle that shows the product clearly. "
+            "Soft afternoon daylight, the product is the clear focal point on the vehicle."
+        ),
+        2: (
+            f"Close-up of a {name} mounted on a vehicle exterior. "
+            "The car is parked in a scenic location — clean urban street or suburban driveway. "
+            "Golden hour lighting creates appealing highlights on both the car body and the product. "
+            "The image shows how the product enhances the vehicle's appearance."
+        ),
+    }
+    scene = scenes.get(variant, scenes[1])
+    style = (
+        "Automotive product photography showing the product installed on a vehicle. "
+        "Photorealistic, lifestyle quality. The product should look like a natural upgrade."
+    )
+    spatial = (
+        "SPATIAL ACCURACY: The vehicle proportions must be realistic. "
+        "The product must be correctly sized relative to the car.\n"
+        f"{NEGATIVE_CAR_SCENE}"
+    )
+    return scene, style, spatial
+
+
+def _build_general_scene(name, target, product_info, variant):
+    """通用产品场景"""
+    scenes = {
+        1: (
+            f"{name} being used in its natural environment by {target}. "
+            "Real, everyday setting with warm natural daylight. "
+            "The person is interacting with the product naturally — "
+            "the scene tells a story of convenience and satisfaction. "
+            "Clean, uncluttered background with soft bokeh."
+        ),
+        2: (
+            f"{name} placed in a clean, well-lit environment that matches its purpose. "
+            "Slightly elevated camera angle. Soft natural lighting, modern aesthetic. "
+            "The product is the clear hero of the image. "
+            "The scene conveys quality and a premium lifestyle."
+        ),
+    }
+    scene = scenes.get(variant, scenes[1])
+    style = (
+        "High-end lifestyle product photography for Amazon listing. "
+        "Photorealistic, editorial quality. NOT a white background studio shot."
+    )
+    spatial = (
+        "The product must be shown at correct, realistic proportions. "
+        "The scene should feel natural and believable."
+    )
+    return scene, style, spatial
 
 
 def build_infographic_base_prompt(product_info, info_variant=1):
