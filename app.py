@@ -12,9 +12,13 @@ API 文档: http://localhost:8000/docs
 
 from __future__ import annotations
 
+import hashlib
+import hmac
 import json
 import logging
 import os
+import subprocess
+import sys
 import time
 import uuid
 import zipfile
@@ -23,7 +27,7 @@ from io import BytesIO
 from typing import Dict, List, Optional
 from threading import Lock
 
-from fastapi import FastAPI, File, Form, UploadFile
+from fastapi import FastAPI, File, Form, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, HTMLResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
@@ -331,6 +335,57 @@ async def list_models():
             "supports_reference": name != "siliconflow",
         })
     return {"models": models}
+
+
+# ---------------------------------------------------------------------------
+# 自动部署 (GitHub Webhook)
+# ---------------------------------------------------------------------------
+
+DEPLOY_SECRET = os.environ.get("DEPLOY_SECRET", "amazon-image-optimizer-deploy-2026")
+
+
+def _verify_github_signature(payload: bytes, signature: str) -> bool:
+    """验证 GitHub Webhook 签名"""
+    if not signature:
+        return False
+    mac = hmac.new(DEPLOY_SECRET.encode(), payload, hashlib.sha256)
+    expected = "sha256=" + mac.hexdigest()
+    return hmac.compare_digest(expected, signature)
+
+
+@app.post("/api/deploy")
+async def deploy(request: Request):
+    """GitHub Webhook: push 事件触发自动部署"""
+    body = await request.body()
+    signature = request.headers.get("X-Hub-Signature-256", "")
+
+    if not _verify_github_signature(body, signature):
+        return {"error": "签名验证失败"}, 403
+
+    # 只处理 push 事件
+    event = request.headers.get("X-GitHub-Event", "")
+    if event != "push":
+        return {"message": f"忽略事件: {event}"}
+
+    logger.info("收到 GitHub push 事件，开始自动部署...")
+
+    try:
+        result = subprocess.run(
+            ["git", "pull", "origin", "main"],
+            cwd=BASE_DIR,
+            capture_output=True, text=True, timeout=30,
+        )
+        logger.info(f"git pull: {result.stdout.strip()}")
+        if result.returncode != 0:
+            logger.error(f"git pull 失败: {result.stderr}")
+            return {"error": f"git pull 失败: {result.stderr}"}
+    except Exception as e:
+        logger.error(f"git pull 异常: {e}")
+        return {"error": str(e)}
+
+    # 重启自身 (systemd 会自动拉起)
+    logger.info("代码已更新，正在重启服务...")
+    os._exit(0)
 
 
 # ---------------------------------------------------------------------------
