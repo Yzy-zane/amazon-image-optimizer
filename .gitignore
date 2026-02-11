@@ -1,0 +1,28 @@
+# API 密钥（绝对不要提交）
+config.json
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+
+# 生成的输出文件
+output/
+images/
+
+# 日志
+*.log
+run.log
+optimizer.log
+
+# 数据文件（体积大，按需排除）
+products.json
+analysis_results.json
+
+# IDE
+.vscode/
+.idea/
+
+# OS
+Thumbs.db
+.DS_Store
