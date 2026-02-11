@@ -10,6 +10,8 @@ API 文档: http://localhost:8000/docs
 前端页面: http://localhost:8000/static/index.html
 """
 
+from __future__ import annotations
+
 import json
 import logging
 import os
@@ -18,7 +20,7 @@ import uuid
 import zipfile
 from concurrent.futures import ThreadPoolExecutor
 from io import BytesIO
-from typing import List
+from typing import Dict, List, Optional
 from threading import Lock
 
 from fastapi import FastAPI, File, Form, UploadFile
