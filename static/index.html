@@ -1,0 +1,463 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Amazon 商品图片 AI 优化</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { font-family: -apple-system, "Microsoft YaHei", "Segoe UI", sans-serif; background: #f5f7fa; color: #333; line-height: 1.6; }
+
+  .header { background: linear-gradient(135deg, #232f3e, #37475a); color: #fff; padding: 24px 0; text-align: center; }
+  .header h1 { font-size: 24px; font-weight: 600; }
+  .header p { font-size: 14px; color: #adb5bd; margin-top: 4px; }
+
+  .container { max-width: 1100px; margin: 24px auto; padding: 0 16px; }
+
+  .card { background: #fff; border-radius: 12px; box-shadow: 0 2px 12px rgba(0,0,0,0.06); padding: 24px; margin-bottom: 20px; }
+  .card h2 { font-size: 18px; margin-bottom: 16px; padding-bottom: 8px; border-bottom: 2px solid #ff9900; display: inline-block; }
+
+  .form-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+  @media (max-width: 700px) { .form-grid { grid-template-columns: 1fr; } }
+
+  .form-group { display: flex; flex-direction: column; }
+  .form-group.full { grid-column: 1 / -1; }
+  .form-group label { font-size: 13px; font-weight: 600; color: #555; margin-bottom: 4px; }
+  .form-group label .req { color: #e74c3c; }
+
+  input, textarea, select {
+    padding: 10px 12px; border: 1px solid #ddd; border-radius: 8px; font-size: 14px;
+    transition: border-color .2s; font-family: inherit;
+  }
+  input:focus, textarea:focus, select:focus { outline: none; border-color: #ff9900; }
+  textarea { resize: vertical; min-height: 60px; }
+
+  .upload-area {
+    border: 2px dashed #ccc; border-radius: 12px; padding: 32px; text-align: center;
+    cursor: pointer; transition: all .2s; position: relative; background: #fafbfc;
+  }
+  .upload-area:hover, .upload-area.dragover { border-color: #ff9900; background: #fff8ef; }
+  .upload-area input { position: absolute; inset: 0; opacity: 0; cursor: pointer; }
+  .upload-area .icon { font-size: 36px; color: #aaa; }
+  .upload-area p { color: #888; font-size: 14px; margin-top: 8px; }
+
+  .preview-grid { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 12px; }
+  .preview-grid .thumb {
+    width: 80px; height: 80px; border-radius: 8px; object-fit: cover; border: 2px solid #eee;
+  }
+  .preview-grid .thumb-remove {
+    position: relative; display: inline-block;
+  }
+  .preview-grid .thumb-remove .remove-btn {
+    position: absolute; top: -6px; right: -6px; width: 20px; height: 20px;
+    background: #e74c3c; color: #fff; border: none; border-radius: 50%;
+    font-size: 12px; cursor: pointer; line-height: 20px; text-align: center;
+  }
+
+  .model-select { display: flex; gap: 12px; flex-wrap: wrap; }
+  .model-option {
+    flex: 1; min-width: 140px; padding: 12px; border: 2px solid #eee; border-radius: 10px;
+    cursor: pointer; text-align: center; transition: all .2s;
+  }
+  .model-option:hover { border-color: #ffbb55; }
+  .model-option.active { border-color: #ff9900; background: #fff8ef; }
+  .model-option .name { font-size: 14px; font-weight: 600; }
+  .model-option .desc { font-size: 12px; color: #888; margin-top: 2px; }
+
+  .btn {
+    display: inline-block; padding: 12px 32px; border: none; border-radius: 10px;
+    font-size: 16px; font-weight: 600; cursor: pointer; transition: all .2s;
+  }
+  .btn-primary { background: #ff9900; color: #fff; }
+  .btn-primary:hover { background: #e88a00; }
+  .btn-primary:disabled { background: #ccc; cursor: not-allowed; }
+  .btn-outline { background: #fff; color: #ff9900; border: 2px solid #ff9900; }
+  .btn-outline:hover { background: #fff8ef; }
+
+  .btn-row { margin-top: 20px; text-align: center; }
+
+  /* 进度 */
+  .progress-section { display: none; }
+  .progress-section.show { display: block; }
+
+  .progress-bar-bg { width: 100%; height: 12px; background: #eee; border-radius: 6px; overflow: hidden; margin: 12px 0; }
+  .progress-bar-fill { height: 100%; background: linear-gradient(90deg, #ff9900, #ffbb55); border-radius: 6px; transition: width .5s; }
+
+  .status-text { font-size: 14px; color: #666; text-align: center; }
+  .status-text .slot { color: #ff9900; font-weight: 600; }
+  .status-text.error { color: #e74c3c; }
+
+  /* 结果 */
+  .result-section { display: none; }
+  .result-section.show { display: block; }
+
+  .score-bar { display: flex; align-items: center; gap: 12px; margin-bottom: 16px; }
+  .score-bar .score-num { font-size: 36px; font-weight: 700; }
+  .score-bar .score-num.pass { color: #27ae60; }
+  .score-bar .score-num.fail { color: #e74c3c; }
+  .score-bar .score-label { font-size: 14px; color: #888; }
+  .score-bar .badge {
+    padding: 4px 12px; border-radius: 20px; font-size: 12px; font-weight: 600;
+  }
+  .badge.pass { background: #d4edda; color: #155724; }
+  .badge.fail { background: #f8d7da; color: #721c24; }
+
+  .stats { display: flex; gap: 24px; margin-bottom: 20px; flex-wrap: wrap; }
+  .stat-item { font-size: 13px; color: #888; }
+  .stat-item strong { color: #333; }
+
+  .image-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 16px; }
+  .image-card { border-radius: 10px; overflow: hidden; border: 1px solid #eee; background: #fafafa; }
+  .image-card img { width: 100%; aspect-ratio: 1; object-fit: cover; display: block; background: #fff; }
+  .image-card .info { padding: 8px 12px; display: flex; justify-content: space-between; align-items: center; }
+  .image-card .info .fname { font-size: 12px; color: #666; }
+  .image-card .info a { font-size: 12px; color: #ff9900; text-decoration: none; font-weight: 600; }
+
+  .download-row { margin-top: 20px; text-align: center; }
+</style>
+</head>
+<body>
+
+<div class="header">
+  <h1>Amazon 商品图片 AI 优化</h1>
+  <p>上传实拍图 + 填写商品信息 &rarr; AI 自动生成 1+7 Amazon 标准组图</p>
+</div>
+
+<div class="container">
+
+  <!-- ========== 表单 ========== -->
+  <div class="card">
+    <h2>商品信息</h2>
+    <form id="mainForm">
+      <div class="form-grid">
+        <div class="form-group">
+          <label><span class="req">*</span> 商品英文名称</label>
+          <input id="f_name" required placeholder="如: Car Trunk Organizer">
+        </div>
+        <div class="form-group">
+          <label>品类</label>
+          <input id="f_category" placeholder="如: car accessories">
+        </div>
+        <div class="form-group">
+          <label>颜色</label>
+          <input id="f_color" placeholder="如: black">
+        </div>
+        <div class="form-group">
+          <label>材质</label>
+          <input id="f_material" placeholder="如: 600D Oxford fabric">
+        </div>
+        <div class="form-group full">
+          <label>产品特点 (逗号分隔)</label>
+          <input id="f_features" placeholder="foldable, waterproof, 72L capacity, multi-compartment">
+        </div>
+        <div class="form-group full">
+          <label><span class="req">*</span> 核心卖点 (逗号分隔，会显示在信息图上，建议 3-6 个)</label>
+          <textarea id="f_selling" placeholder="72L Large Capacity, Waterproof & Durable, Foldable Design, Easy Installation"></textarea>
+        </div>
+        <div class="form-group">
+          <label>目标用户</label>
+          <input id="f_audience" placeholder="如: car and SUV owners">
+        </div>
+      </div>
+
+      <!-- AI 模型选择 -->
+      <div style="margin-top: 20px;">
+        <label style="font-size:13px; font-weight:600; color:#555;">AI 模型</label>
+        <div class="model-select" style="margin-top:8px;">
+          <div class="model-option active" data-model="siliconflow">
+            <div class="name">SiliconFlow</div>
+            <div class="desc">FLUX.1-schnell / 免费</div>
+          </div>
+          <div class="model-option" data-model="gpt-4o">
+            <div class="name">GPT-4o</div>
+            <div class="desc">DALL-E 3 / 付费</div>
+          </div>
+          <div class="model-option" data-model="flux">
+            <div class="name">Flux Pro</div>
+            <div class="desc">BFL API / 付费</div>
+          </div>
+        </div>
+      </div>
+
+      <!-- 图片上传 -->
+      <div style="margin-top: 20px;">
+        <label style="font-size:13px; font-weight:600; color:#555;"><span class="req">*</span> 上传商品实拍图 (支持多张)</label>
+        <div class="upload-area" id="uploadArea">
+          <input type="file" id="photoInput" multiple accept="image/*">
+          <div class="icon">+</div>
+          <p>点击或拖拽上传图片<br><span style="font-size:12px; color:#aaa;">第一张为主参考图，支持 JPG / PNG</span></p>
+        </div>
+        <div class="preview-grid" id="previewGrid"></div>
+      </div>
+
+      <div class="btn-row">
+        <button type="submit" class="btn btn-primary" id="submitBtn">开始生成 (1+7 组图)</button>
+      </div>
+    </form>
+  </div>
+
+  <!-- ========== 进度 ========== -->
+  <div class="card progress-section" id="progressSection">
+    <h2>生成进度</h2>
+    <div class="progress-bar-bg"><div class="progress-bar-fill" id="progressFill" style="width:0%"></div></div>
+    <div class="status-text" id="statusText">准备中...</div>
+  </div>
+
+  <!-- ========== 结果 ========== -->
+  <div class="card result-section" id="resultSection">
+    <h2>生成结果</h2>
+
+    <div class="score-bar">
+      <div class="score-num" id="scoreNum">--</div>
+      <div>
+        <div class="score-label">/ 100 综合评分</div>
+        <span class="badge" id="passBadge">--</span>
+      </div>
+    </div>
+
+    <div class="stats" id="statsRow"></div>
+
+    <div class="image-grid" id="imageGrid"></div>
+
+    <div class="download-row">
+      <button class="btn btn-outline" id="downloadAllBtn">打包下载全部图片 (ZIP)</button>
+    </div>
+  </div>
+
+</div>
+
+<script>
+// ========== 状态 ==========
+let selectedModel = 'siliconflow';
+let uploadedFiles = [];
+let currentJobId = null;
+let pollTimer = null;
+
+// ========== 模型选择 ==========
+document.querySelectorAll('.model-option').forEach(el => {
+  el.addEventListener('click', () => {
+    document.querySelectorAll('.model-option').forEach(e => e.classList.remove('active'));
+    el.classList.add('active');
+    selectedModel = el.dataset.model;
+  });
+});
+
+// ========== 图片上传 ==========
+const photoInput = document.getElementById('photoInput');
+const uploadArea = document.getElementById('uploadArea');
+const previewGrid = document.getElementById('previewGrid');
+
+photoInput.addEventListener('change', (e) => {
+  addFiles(e.target.files);
+});
+
+uploadArea.addEventListener('dragover', (e) => { e.preventDefault(); uploadArea.classList.add('dragover'); });
+uploadArea.addEventListener('dragleave', () => { uploadArea.classList.remove('dragover'); });
+uploadArea.addEventListener('drop', (e) => {
+  e.preventDefault();
+  uploadArea.classList.remove('dragover');
+  addFiles(e.dataTransfer.files);
+});
+
+function addFiles(fileList) {
+  for (const f of fileList) {
+    if (f.type.startsWith('image/')) uploadedFiles.push(f);
+  }
+  renderPreviews();
+}
+
+function renderPreviews() {
+  previewGrid.innerHTML = '';
+  uploadedFiles.forEach((f, idx) => {
+    const wrap = document.createElement('div');
+    wrap.className = 'thumb-remove';
+
+    const img = document.createElement('img');
+    img.className = 'thumb';
+    img.src = URL.createObjectURL(f);
+
+    const btn = document.createElement('button');
+    btn.className = 'remove-btn';
+    btn.textContent = 'x';
+    btn.onclick = (e) => { e.preventDefault(); uploadedFiles.splice(idx, 1); renderPreviews(); };
+
+    wrap.appendChild(img);
+    wrap.appendChild(btn);
+
+    if (idx === 0) {
+      const tag = document.createElement('div');
+      tag.style.cssText = 'font-size:10px; text-align:center; color:#ff9900; font-weight:600; margin-top:2px;';
+      tag.textContent = '主图';
+      wrap.appendChild(tag);
+    }
+
+    previewGrid.appendChild(wrap);
+  });
+}
+
+// ========== 表单提交 ==========
+document.getElementById('mainForm').addEventListener('submit', async (e) => {
+  e.preventDefault();
+
+  const name = document.getElementById('f_name').value.trim();
+  const selling = document.getElementById('f_selling').value.trim();
+  if (!name) { alert('请填写商品英文名称'); return; }
+  if (!selling) { alert('请填写核心卖点'); return; }
+  if (uploadedFiles.length === 0) { alert('请上传至少一张商品实拍图'); return; }
+
+  // 构建 product_info
+  const info = { name };
+  const cat = document.getElementById('f_category').value.trim();
+  if (cat) info.category = cat;
+  const color = document.getElementById('f_color').value.trim();
+  if (color) info.color = color;
+  const mat = document.getElementById('f_material').value.trim();
+  if (mat) info.material = mat;
+  const feats = document.getElementById('f_features').value.trim();
+  if (feats) info.features = feats.split(',').map(s => s.trim()).filter(Boolean);
+  info.selling_points = selling.split(',').map(s => s.trim()).filter(Boolean);
+  const aud = document.getElementById('f_audience').value.trim();
+  if (aud) info.target_audience = aud;
+
+  // 构建 FormData
+  const fd = new FormData();
+  fd.append('product_info', JSON.stringify(info));
+  fd.append('model', selectedModel);
+  for (const f of uploadedFiles) {
+    fd.append('photos', f);
+  }
+
+  // 提交
+  const btn = document.getElementById('submitBtn');
+  btn.disabled = true;
+  btn.textContent = '提交中...';
+
+  try {
+    const resp = await fetch('/api/generate', { method: 'POST', body: fd });
+    const data = await resp.json();
+
+    if (data.error) {
+      alert('提交失败: ' + data.error);
+      btn.disabled = false;
+      btn.textContent = '开始生成 (1+7 组图)';
+      return;
+    }
+
+    currentJobId = data.job_id;
+    showProgress();
+    startPolling();
+  } catch (err) {
+    alert('网络错误: ' + err.message);
+    btn.disabled = false;
+    btn.textContent = '开始生成 (1+7 组图)';
+  }
+});
+
+// ========== 进度轮询 ==========
+function showProgress() {
+  document.getElementById('progressSection').classList.add('show');
+  document.getElementById('resultSection').classList.remove('show');
+}
+
+function startPolling() {
+  if (pollTimer) clearInterval(pollTimer);
+  pollTimer = setInterval(pollStatus, 2000);
+  pollStatus();
+}
+
+async function pollStatus() {
+  if (!currentJobId) return;
+  try {
+    const resp = await fetch(`/api/status/${currentJobId}`);
+    const data = await resp.json();
+
+    const statusEl = document.getElementById('statusText');
+    const fillEl = document.getElementById('progressFill');
+
+    if (data.status === 'pending') {
+      statusEl.innerHTML = '排队中...';
+      fillEl.style.width = '5%';
+    } else if (data.status === 'generating') {
+      const parts = (data.progress || '0/8').split('/');
+      const done = parseInt(parts[0]) || 0;
+      const total = parseInt(parts[1]) || 8;
+      const pct = Math.round((done / total) * 85) + 5;
+      fillEl.style.width = pct + '%';
+      const slotName = data.current_slot || '';
+      statusEl.innerHTML = `AI 生成中 <span class="slot">${data.progress}</span>` +
+        (slotName ? ` &mdash; ${slotName}` : '');
+    } else if (data.status === 'validating') {
+      fillEl.style.width = '92%';
+      statusEl.innerHTML = '质量评分验证中...';
+    } else if (data.status === 'done') {
+      fillEl.style.width = '100%';
+      statusEl.innerHTML = '生成完成!';
+      clearInterval(pollTimer);
+      loadResults();
+    } else if (data.status === 'failed') {
+      fillEl.style.width = '100%';
+      fillEl.style.background = '#e74c3c';
+      statusEl.innerHTML = '生成失败: ' + (data.error || '未知错误');
+      statusEl.classList.add('error');
+      clearInterval(pollTimer);
+      document.getElementById('submitBtn').disabled = false;
+      document.getElementById('submitBtn').textContent = '重新生成';
+    }
+  } catch (err) {
+    console.error('Poll error:', err);
+  }
+}
+
+// ========== 加载结果 ==========
+async function loadResults() {
+  if (!currentJobId) return;
+  const resp = await fetch(`/api/results/${currentJobId}`);
+  const data = await resp.json();
+  if (data.error) return;
+
+  // 评分
+  const score = data.scores?.normalized_score;
+  const scoreEl = document.getElementById('scoreNum');
+  scoreEl.textContent = score != null ? Math.round(score) : '--';
+  scoreEl.className = 'score-num ' + (data.passed ? 'pass' : 'fail');
+
+  const badge = document.getElementById('passBadge');
+  badge.textContent = data.passed ? 'PASS' : 'NEEDS IMPROVEMENT';
+  badge.className = 'badge ' + (data.passed ? 'pass' : 'fail');
+
+  // 统计
+  const statsRow = document.getElementById('statsRow');
+  statsRow.innerHTML = `
+    <div class="stat-item">生成 <strong>${data.generated_count}</strong> 张</div>
+    <div class="stat-item">失败 <strong>${data.failed_count}</strong> 张</div>
+    <div class="stat-item">费用 <strong>$${data.cost_usd}</strong></div>
+  `;
+
+  // 图片网格
+  const grid = document.getElementById('imageGrid');
+  grid.innerHTML = '';
+  (data.files || []).forEach(f => {
+    const card = document.createElement('div');
+    card.className = 'image-card';
+    card.innerHTML = `
+      <img src="/api/download/${currentJobId}/${f.filename}" alt="${f.filename}" loading="lazy">
+      <div class="info">
+        <span class="fname">${f.filename} (${f.size_kb}KB)</span>
+        <a href="/api/download/${currentJobId}/${f.filename}" download="${f.filename}">下载</a>
+      </div>
+    `;
+    grid.appendChild(card);
+  });
+
+  // 下载全部按钮
+  document.getElementById('downloadAllBtn').onclick = () => {
+    window.location.href = `/api/download/${currentJobId}`;
+  };
+
+  document.getElementById('resultSection').classList.add('show');
+  document.getElementById('submitBtn').disabled = false;
+  document.getElementById('submitBtn').textContent = '重新生成';
+}
+</script>
+</body>
+</html>

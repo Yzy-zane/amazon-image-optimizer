@@ -1,13 +1,21 @@
 """
-Prompt 模板系统
-基于 5 个评分维度设计 Prompt，支持动态填充产品信息。
+Prompt 模板系统 v2
+基于 Amazon 平台合规标准、商家效率需求、买家心理预期三维度优化。
 
-5 种图片类型：
-1. 主图 (main) - 纯白背景、产品居中、无文字无阴影、专业摄影质感
-2. 场景图 (lifestyle) - 产品在真实使用场景中、自然暖色调、故事感
-3. 信息图 (infographic) - AI生成底图 + Pillow叠加文字层
-4. 细节图 (detail) - 微距风格、材质纹理、浅景深、品质感
-5. 多角度图 (multiangle) - 侧面/背面/俯视、白底、揭示主图看不到的特征
+v1 → v2 改进点:
+- 主图填充比 70-85% → 85-95% (Amazon 搜索权重要求)
+- 主图增加禁止包装/车辆部件指令
+- 场景图增加车型感知 (SUV/Sedan/Truck)，防止空间扭曲
+- 全部 prompt 增加负向指令 (AVOID)，防止常见 AI 生成错误
+- 细节图增加更具体的汽车饰品材质描述
+- 信息图文字计划增加尺寸参考维度
+
+5 种图片类型:
+1. 主图 (main) - 纯白背景、产品占 85-95%、无文字无包装
+2. 场景图 (lifestyle) - 车内/使用场景、空间比例准确、温暖氛围
+3. 信息图 (infographic) - AI 底图 + Pillow 叠加文字 + 尺寸参考
+4. 细节图 (detail) - 微距材质、缝线工艺、功能部件特写
+5. 多角度图 (multiangle) - 补充视角、白底、一致视觉风格
 """
 
 import logging
@@ -16,62 +24,73 @@ logger = logging.getLogger(__name__)
 
 
 # ============================================================
-# 基础 Prompt 组件（来自评分维度的要求）
+# Prompt 组件 v2
 # ============================================================
 
-# 技术指标 → 输出规格指令
+# 技术规格 (精简，每条 prompt 结尾统一附加)
 TECH_SPEC = (
-    "Output a high-resolution product photograph, at least 2000x2000 pixels, "
-    "sharp focus throughout, saved as high-quality JPEG."
+    "Output: 2000x2000 pixel photograph, photorealistic, studio-grade, "
+    "tack-sharp focus, high-quality JPEG."
 )
 
-# 主图合规性 → 白底要求
+# 主图合规 (Amazon 2026 标准)
 MAIN_COMPLIANCE = (
-    "Pure white background RGB(255,255,255). Product centered, occupying 70-85% of the frame. "
-    "No text, no logos, no watermarks, no shadows, no props. "
-    "Clean, professional e-commerce product photography style."
+    "Pure white background RGB(255,255,255) — absolutely no gray, no gradient, "
+    "no shadow cast on the background. "
+    "Product centered, filling 85-95% of the frame with minimal white border. "
+    "PROHIBITED: text, logos, watermarks, shadows on background, props, "
+    "packaging, boxes, tags, price labels, hangers. "
+    "Product only — do NOT include vehicle parts, car seats, steering wheels, "
+    "or any non-product elements as background. "
+    "Amazon e-commerce main image standard."
 )
 
-# 设计质量 → 光线/构图/色彩
+# 设计质量 (专业摄影术语)
 DESIGN_QUALITY = (
-    "Even, soft studio lighting with no harsh shadows. "
-    "Centered, balanced composition. "
-    "Rich, natural colors with accurate white balance. "
-    "Tack-sharp focus on the product."
+    "Professional three-point studio lighting: "
+    "key light at 45 degrees for gentle highlight modeling, "
+    "fill light opposite to eliminate harsh shadows, "
+    "rim light from behind for crisp edge separation from the white background. "
+    "Centered, symmetrical composition. "
+    "Vivid, true-to-life colors with precise white balance. "
+    "Tack-sharp focus across the entire product surface."
 )
 
-# 营销效果 → 场景/卖点
+# 场景营销 (汽车饰品专用)
 MARKETING_SCENE = (
-    "Show the product in a realistic, aspirational use scenario. "
-    "Warm, inviting lighting. Tell a visual story that makes the viewer "
-    "imagine owning and using this product."
+    "Realistic, aspirational automotive lifestyle photograph. "
+    "Warm, natural lighting — soft daylight or golden hour, never harsh or artificial. "
+    "The vehicle interior must have physically correct, realistic proportions and geometry. "
+    "The viewer should immediately imagine this product in their own vehicle."
 )
 
+# 信息图营销
 MARKETING_INFO = (
-    "Highlight the product's key selling points and unique features. "
-    "Professional, clean layout that communicates value clearly."
+    "Highlight the product's key selling points and unique value proposition. "
+    "Professional, clean layout that communicates quality and trust."
+)
+
+# 负向指令 — 嵌入每条 prompt，防止 AI 生成常见错误
+NEGATIVE_GENERAL = (
+    "AVOID: blurry areas, soft focus, artificial-looking plastic textures, "
+    "distorted proportions, any text or letters or numbers, watermarks, logos, "
+    "unnatural color casts, low-resolution artifacts, over-saturation."
+)
+
+NEGATIVE_CAR_SCENE = (
+    "AVOID: distorted car interior geometry, impossible trunk or cabin dimensions, "
+    "warped seats or dashboard, incorrect vehicle scale relative to product, "
+    "unrealistic lighting inside vehicle, product floating or poorly placed in space, "
+    "generic stock-photo feel."
 )
 
 
 # ============================================================
-# 产品信息格式化
+# 产品信息工具函数
 # ============================================================
 
 def format_product_description(product_info):
-    """
-    将产品信息字典格式化为 prompt 可用的描述。
-
-    product_info 示例:
-    {
-        "name": "Car Trunk Organizer",
-        "category": "car accessories",
-        "features": ["foldable", "waterproof", "72L capacity"],
-        "material": "Oxford fabric",
-        "color": "black",
-        "selling_points": ["Large capacity", "Easy to install", "Durable material"],
-        "target_audience": "car owners",
-    }
-    """
+    """将产品信息字典格式化为 prompt 描述段。"""
     parts = []
 
     name = product_info.get("name", "product")
@@ -96,14 +115,53 @@ def format_product_description(product_info):
     return ". ".join(parts) + "."
 
 
+def _detect_vehicle_type(product_info):
+    """从产品信息推断车型，用于场景图选择合适的场景。"""
+    text = " ".join([
+        product_info.get("name", ""),
+        product_info.get("category", ""),
+        " ".join(product_info.get("features", [])),
+        product_info.get("target_audience", ""),
+    ]).lower()
+
+    if "suv" in text:
+        return "SUV"
+    elif "truck" in text or "pickup" in text:
+        return "truck"
+    elif "sedan" in text:
+        return "sedan"
+    return "car"
+
+
+def _extract_size_info(product_info):
+    """从产品特点/卖点中提取尺寸相关信息，用于信息图尺寸参考。"""
+    all_items = (
+        product_info.get("features", [])
+        + product_info.get("selling_points", [])
+    )
+    size_keywords = [
+        "capacity", "liter", "gallon", "inch", "cm", "mm",
+        "size", "fit", "hold", "large", "big", "L ",
+    ]
+    for item in all_items:
+        item_str = item if isinstance(item, str) else str(item)
+        if any(kw.lower() in item_str.lower() for kw in size_keywords):
+            return item_str
+    return None
+
+
 # ============================================================
-# Prompt 模板
+# Prompt 模板 v2
 # ============================================================
 
 def build_main_prompt(product_info):
     """
-    主图 Prompt - 纯白背景产品照
-    用于 image-to-image 编辑（以原图为参考）
+    主图 — 纯白背景产品照 (Amazon 合规)
+
+    v2 改进:
+    - 填充比 85-95%（Amazon 搜索权重）
+    - 禁止包装、标签、车辆部件
+    - 增加负向指令
     """
     desc = format_product_description(product_info)
 
@@ -112,119 +170,184 @@ def build_main_prompt(product_info):
         f"{MAIN_COMPLIANCE}\n\n"
         f"{DESIGN_QUALITY}\n\n"
         f"{TECH_SPEC}\n\n"
-        "Style: Professional Amazon product listing main image. "
-        "Photorealistic, studio quality. The product should look premium and trustworthy."
+        f"{NEGATIVE_GENERAL}\n\n"
+        "Style: Premium Amazon product listing main image. "
+        "The product must look high-quality, trustworthy, and worth purchasing. "
+        "Photorealistic studio photography, not a 3D render."
     )
     return prompt
 
 
 def build_lifestyle_prompt(product_info, scene_variant=1):
     """
-    场景图 Prompt - 产品在真实使用场景中
-    scene_variant: 1-3, 不同场景变体
+    场景图 — 产品在真实车内/使用场景
+
+    v2 改进:
+    - 根据车型 (SUV/Sedan/Truck) 选择合适场景
+    - 强调空间比例准确，防止车内几何扭曲
+    - 增加负向指令防止常见 AI 错误
     """
     desc = format_product_description(product_info)
     name = product_info.get("name", "the product")
-    target = product_info.get("target_audience", "the user")
-    category = product_info.get("category", "")
+    target = product_info.get("target_audience", "a car owner")
+    vehicle = _detect_vehicle_type(product_info)
 
-    # 根据产品类别和变体编号选择不同场景
-    scene_descriptions = {
+    # ---- SUV 场景 ----
+    suv_scenes = {
         1: (
-            f"Show {name} being actively used in its natural environment. "
-            f"A person ({target}) is interacting with the product in a real, everyday setting. "
-            "Natural daylight, warm tones, lifestyle photography feel. "
-            "The scene tells a story of convenience and satisfaction."
+            f"{name} placed inside the spacious trunk of a modern SUV (like Honda CR-V or Toyota RAV4). "
+            f"A person ({target}) is reaching into the organized trunk, loading shopping bags. "
+            "Camera shoots from behind the open tailgate at a slight downward angle. "
+            "The SUV is parked in a suburban driveway, soft afternoon daylight. "
+            "The trunk space is clean and well-organized, the product fits naturally. "
+            "The scene conveys everyday convenience and an organized lifestyle."
         ),
         2: (
-            f"Show {name} installed/placed in its intended location. "
-            "Clean, well-organized environment. Slightly elevated angle. "
-            "Soft natural lighting, modern aesthetic. "
-            "The image conveys quality and a premium lifestyle."
-        ),
-        3: (
-            f"Show {name} in an outdoor or travel context. "
-            "Dynamic, active scene with appealing background. "
-            "Golden hour lighting, vibrant colors. "
-            "The image evokes adventure and reliability."
+            f"{name} neatly installed in the rear cargo area of a premium SUV. "
+            "The tailgate is open, showing the product perfectly fitted in the trunk space. "
+            "Background: a tree-lined suburban street visible through the rear window. "
+            "Late afternoon golden light streams in from behind. "
+            "The image suggests weekend family trips and outdoor adventures. "
+            "Everything looks tidy, premium, and well-planned."
         ),
     }
 
-    scene = scene_descriptions.get(scene_variant, scene_descriptions[1])
+    # ---- Truck 场景 ----
+    truck_scenes = {
+        1: (
+            f"{name} in the rear seat area or extended cab storage of a pickup truck. "
+            f"A person ({target}) is accessing the product from the passenger side. "
+            "Outdoor setting — a clean worksite or trailhead parking area. "
+            "Warm golden hour lighting with long shadows. "
+            "The scene conveys rugged reliability and smart organization."
+        ),
+        2: (
+            f"{name} installed in a truck's rear seat organizer space. "
+            "Work gear and outdoor equipment neatly arranged alongside the product. "
+            "Early morning light with a slight cool-to-warm gradient. "
+            "The image communicates utility, durability, and readiness for action."
+        ),
+    }
+
+    # ---- Sedan / 通用车型场景 ----
+    sedan_scenes = {
+        1: (
+            f"{name} placed inside the trunk of a modern sedan (like Honda Accord or Toyota Camry). "
+            f"A person ({target}) is leaning in to retrieve something from the product. "
+            "Clean underground parking or home garage setting. "
+            "Soft overhead lighting mixed with natural light from the entrance. "
+            "The trunk is organized and tidy. "
+            "The scene tells a story of daily convenience and smart organization."
+        ),
+        2: (
+            f"{name} neatly set up in a car's rear trunk compartment. "
+            "The trunk lid is open, showing the product fitting perfectly in the available space. "
+            "Bright daylight exterior visible behind the car. "
+            "Shot from a 3/4 rear angle so both the car and the product interior are visible. "
+            "The image conveys a tidy, quality-conscious lifestyle."
+        ),
+    }
+
+    scene_map = {
+        "SUV": suv_scenes,
+        "truck": truck_scenes,
+        "sedan": sedan_scenes,
+        "car": sedan_scenes,
+    }
+    scenes = scene_map.get(vehicle, sedan_scenes)
+    scene = scenes.get(scene_variant, scenes[1])
 
     prompt = (
         f"{desc}\n\n"
-        f"{scene}\n\n"
+        f"SCENE: {scene}\n\n"
         f"{MARKETING_SCENE}\n\n"
+        "SPATIAL ACCURACY RULE: The vehicle interior dimensions must be physically correct "
+        "and proportional. The product must fit naturally in the space shown — "
+        "no impossible sizing, no distorted geometry. "
+        f"Vehicle type: {vehicle}.\n\n"
         f"{TECH_SPEC}\n\n"
-        "Style: High-end lifestyle product photography for Amazon listing. "
-        "Photorealistic, editorial quality. NOT a white background studio shot."
+        f"{NEGATIVE_GENERAL}\n"
+        f"{NEGATIVE_CAR_SCENE}\n\n"
+        "Style: High-end automotive lifestyle photography for Amazon listing. "
+        "Photorealistic, editorial quality. This is NOT a white background studio shot — "
+        "it is an in-context lifestyle image."
     )
     return prompt
 
 
 def build_infographic_base_prompt(product_info, info_variant=1):
     """
-    信息图底图 Prompt（第一步：AI 生成产品展示底图，不含文字）
-    文字层将由 Pillow 在第二步叠加
+    信息图底图 — AI 生成无文字底图，后续 Pillow 叠加文字
+
+    v2 改进:
+    - 更强的禁止文字指令
+    - 改进构图描述，留出更清晰的文字叠加空间
+    - 增加负向指令
     """
     desc = format_product_description(product_info)
     name = product_info.get("name", "the product")
-    features = product_info.get("features", [])
 
-    angle_descriptions = {
-        1: (
-            f"A single {name} photographed from a 3/4 top-down angle, "
-            "centered on a clean solid light gray gradient background. "
-            "The product occupies the center 50% of the frame. "
-            "Large empty margins on left, right, and top for later use. "
-            "Minimalist, clean product photography."
-        ),
-        2: (
-            f"A grid of 6-8 small photographs of {name} from different angles, "
-            "arranged neatly on a clean white background. "
-            "Each photo in a rounded rectangle frame. "
-            "Large empty space at top and bottom of the image. "
-            "Clean, organized catalog-style product collage."
-        ),
-    }
-
-    angle = angle_descriptions.get(info_variant, angle_descriptions[1])
-
-    # 用最强硬的措辞禁止 AI 生成文字
     no_text_rule = (
-        "ABSOLUTE RULE: This image must contain ZERO text. "
+        "ABSOLUTE RULE — ZERO TEXT IN THIS IMAGE: "
         "No letters, no words, no numbers, no labels, no logos, no brand names, "
-        "no watermarks, no captions, no annotations. "
-        "The image is ONLY the physical product and the background. Nothing else. "
-        "If you add any text or typography, the image is rejected."
+        "no watermarks, no captions, no annotations, no symbols that resemble text. "
+        "The image contains ONLY the physical product and a clean background. "
+        "Any text or typography of any kind = automatic rejection."
     )
+
+    if info_variant == 1:
+        # Layout 1: 产品居中，左右留白给卖点文字
+        composition = (
+            f"A single {name} photographed from a 3/4 elevated angle (about 30 degrees from above). "
+            "Product centered on a clean, smooth light-gray to white gradient background. "
+            "The product occupies ONLY the center 40-50% of the frame. "
+            "CRITICAL: Leave large, clean, empty margins on the left side (25%), "
+            "right side (25%), and top (15%) of the image — these spaces will be used "
+            "for text overlay in post-production. "
+            "Even, soft shadowless lighting. Minimalist, premium product photography."
+        )
+    else:
+        # Layout 2: 产品居上，底部留白给特性条
+        composition = (
+            f"A feature-highlight view of {name}. "
+            "Product positioned in the upper 60% of the frame on a clean white background. "
+            "If the product has multiple compartments or parts, show them slightly separated "
+            "to reveal internal structure and craftsmanship. "
+            "CRITICAL: Leave the bottom 30% of the image completely empty and white — "
+            "this space will be used for feature labels in post-production. "
+            "Also leave the top 10% empty for a title. "
+            "Clean, organized, catalog-style product visualization."
+        )
 
     prompt = (
         f"{no_text_rule}\n\n"
         f"{desc}\n\n"
-        f"{angle}\n\n"
+        f"COMPOSITION: {composition}\n\n"
         f"{TECH_SPEC}\n\n"
-        "Style: Clean product-only photograph for an infographic base layer. "
-        "Photorealistic, no graphic design elements, no text of any kind."
+        f"{NEGATIVE_GENERAL}\n\n"
+        "Style: Clean product photograph optimized as an infographic base layer. "
+        "Photorealistic, no graphic design elements, absolutely no text of any kind."
     )
     return prompt
 
 
 def build_infographic_text_plan(product_info, info_variant=1):
     """
-    信息图文字层计划（供 Pillow 渲染使用）
-    返回要叠加的文字元素列表
+    信息图文字叠加计划 (供 Pillow 渲染)
+
+    v2 改进:
+    - 增加尺寸参考维度 (如有容量/尺寸信息)
     """
     name = product_info.get("name", "Product")
     selling_points = product_info.get("selling_points", [])
     features = product_info.get("features", [])
 
-    # 如果没有 selling_points，用 features 代替
+    # 优先用 selling_points，没有就用 features
     points = selling_points if selling_points else features
+    size_info = _extract_size_info(product_info)
 
     if info_variant == 1:
-        # 布局1：左右两侧标注卖点
+        # Layout 1: 标题顶部 + 卖点左右分列
         text_elements = [
             {
                 "type": "title",
@@ -234,8 +357,17 @@ def build_infographic_text_plan(product_info, info_variant=1):
             },
         ]
 
-        # 卖点分列两侧
-        for i, point in enumerate(points[:6]):
+        # 卖点分列两侧（最多 6 个）
+        display_points = list(points[:6])
+
+        # 如果有尺寸信息且不在卖点中，替换最后一个
+        if size_info and not any(size_info.lower() in p.lower() for p in display_points):
+            if len(display_points) >= 6:
+                display_points[5] = f"Size: {size_info}"
+            else:
+                display_points.append(f"Size: {size_info}")
+
+        for i, point in enumerate(display_points):
             side = "left" if i % 2 == 0 else "right"
             text_elements.append({
                 "type": "feature",
@@ -246,7 +378,7 @@ def build_infographic_text_plan(product_info, info_variant=1):
             })
 
     else:
-        # 布局2：底部横排特性条
+        # Layout 2: 标题顶部 + 底部特性框
         text_elements = [
             {
                 "type": "title",
@@ -256,7 +388,9 @@ def build_infographic_text_plan(product_info, info_variant=1):
             },
         ]
 
-        for i, point in enumerate(points[:4]):
+        display_points = list(points[:4])
+
+        for i, point in enumerate(display_points):
             text_elements.append({
                 "type": "feature_box",
                 "text": point if isinstance(point, str) else str(point),
@@ -270,78 +404,92 @@ def build_infographic_text_plan(product_info, info_variant=1):
 
 def build_detail_prompt(product_info, detail_variant=1):
     """
-    细节图 Prompt - 微距风格、材质纹理
+    细节图 — 微距/材质/功能特写
+
+    v2 改进:
+    - 更具体的汽车饰品材质描述
+    - 更专业的微距摄影术语
+    - 增加负向指令
     """
     desc = format_product_description(product_info)
     name = product_info.get("name", "the product")
     material = product_info.get("material", "the material")
-    features = product_info.get("features", [])
 
-    detail_descriptions = {
+    details = {
         1: (
-            f"Extreme close-up macro photograph of {name}, focusing on the {material} texture "
-            "and build quality. Shallow depth of field (f/2.8), the focused area is tack-sharp "
-            "while the background gently blurs. Show stitching, material grain, or surface finish details."
+            # 材质微距 — 展示做工品质
+            f"Extreme close-up macro photograph of {name}. "
+            f"Focus on the {material} texture, stitching precision, and surface finish quality. "
+            "Camera settings: f/2.8 aperture for shallow depth of field — "
+            "the focal area is razor-sharp while the background dissolves into creamy bokeh. "
+            "Show the weave of the fabric, the straightness and evenness of the seams, "
+            "the quality of edge binding or reinforcement stitching. "
+            "Lighting: soft diffused ring light from above, creating subtle texture shadows "
+            "that reveal material depth and quality. "
+            "The close-up should make the viewer feel they can almost touch the material."
         ),
         2: (
-            f"Close-up photograph of {name}'s key functional detail or mechanism. "
-            "Show how a specific feature works — buckle, zipper, hinge, connector, or interface. "
-            "Clean, well-lit, with subtle background."
-        ),
-        3: (
-            f"Close-up showing the craftsmanship and premium quality of {name}. "
-            "Highlight the finish, color accuracy, and material quality. "
-            "Professional macro photography with ring light reflection."
+            # 功能特写 — 展示关键机制
+            f"Close-up photograph of {name}'s most important functional mechanism. "
+            "Show one specific feature in action: a buckle being clasped, "
+            "a zipper being pulled open, a velcro strap being attached, "
+            "a handle being gripped, or a compartment divider being adjusted. "
+            "The mechanism should be captured mid-action to show how it works. "
+            "Clean, slightly blurred neutral background (light gray or white). "
+            "Professional product detail lighting — bright, even, no harsh shadows. "
+            "The image should answer the buyer's question: 'How does this part work?'"
         ),
     }
 
-    detail = detail_descriptions.get(detail_variant, detail_descriptions[1])
+    detail = details.get(detail_variant, details[1])
 
     prompt = (
         f"{desc}\n\n"
-        f"{detail}\n\n"
+        f"SHOT: {detail}\n\n"
         f"{TECH_SPEC}\n\n"
-        "Style: Macro product detail photography. "
-        "The close-up should communicate premium quality and attention to detail. "
-        "Shallow depth of field, crisp focus on the key area."
+        f"{NEGATIVE_GENERAL}\n\n"
+        "Style: Professional macro product photography for e-commerce. "
+        "Communicate premium build quality and craftsmanship through close-up detail. "
+        "Shallow depth of field, precise focus, inviting tactile quality. "
+        "The viewer should feel confident about the product's build quality."
     )
     return prompt
 
 
 def build_multiangle_prompt(product_info, angle_variant=1):
     """
-    多角度图 Prompt - 侧面/背面/俯视
+    多角度图 — 补充主图看不到的角度
+
+    v2 改进:
+    - 只保留 1 张（45度俯视角，信息量最大）
+    - 强调与主图视觉一致性
+    - 增加负向指令
     """
     desc = format_product_description(product_info)
     name = product_info.get("name", "the product")
 
-    angle_descriptions = {
+    angles = {
         1: (
-            f"Side view of {name} on a pure white background. "
-            "Show the product's profile, thickness, and side details that are not visible "
-            "from the front. Clean, studio-lit, same visual style as the main image."
-        ),
-        2: (
-            f"Back/rear view of {name} on a pure white background. "
-            "Reveal the back design, labels, ports, or construction details. "
-            "Professional studio lighting, consistent with the main image style."
-        ),
-        3: (
-            f"Top-down/bird's-eye view of {name} on a pure white background. "
-            "Show the product from directly above, revealing its footprint, layout, "
-            "and top surface details."
+            f"45-degree elevated angle view of {name} on a pure white background. "
+            "Show the product's top surface, depth, and full three-dimensional form. "
+            "This angle reveals features not visible in the straight-on main image: "
+            "the top opening or surface, internal compartments (if visible from above), "
+            "overall depth and proportions. "
+            "Same professional studio lighting as the main image — consistent visual style. "
+            "The viewer should feel they are looking down at the product on a table."
         ),
     }
 
-    angle = angle_descriptions.get(angle_variant, angle_descriptions[1])
+    angle = angles.get(angle_variant, angles[1])
 
     prompt = (
         f"{desc}\n\n"
-        f"{angle}\n\n"
+        f"ANGLE: {angle}\n\n"
         f"{MAIN_COMPLIANCE}\n\n"
         f"{TECH_SPEC}\n\n"
+        f"{NEGATIVE_GENERAL}\n\n"
         "Style: Multi-angle product photography for Amazon listing. "
-        "White background, studio quality, consistent with the main product image."
+        "Pure white background, studio quality, visually consistent with the main product image."
     )
     return prompt
 
@@ -427,7 +575,6 @@ def generate_prompt_plan(product_info, generation_plan=None):
 if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
-    # 测试用产品信息
     test_product = {
         "name": "Car Trunk Organizer",
         "category": "car accessories",
@@ -442,14 +589,18 @@ if __name__ == "__main__":
             "Easy Installation",
             "Premium 600D Oxford Fabric",
         ],
-        "target_audience": "car owners who need organized trunk space",
+        "target_audience": "car and SUV owners who need organized trunk space",
     }
 
     plan = generate_prompt_plan(test_product)
 
     print("\n" + "=" * 60)
-    for i, p in enumerate(plan):
-        print(f"\n--- [{p['slot']}] {p['type']} ---")
-        print(p["prompt"][:200] + "...")
+    for i, p in enumerate(plan, 1):
+        print(f"\n--- [{i}/{len(plan)}] {p['slot']} ({p['type']}) ---")
+        print(f"Prompt ({len(p['prompt'])} chars):")
+        print(p["prompt"])
         if "text_plan" in p:
-            print(f"  文字元素: {len(p['text_plan'])} 个")
+            print(f"\nText overlay ({len(p['text_plan'])} elements):")
+            for t in p["text_plan"]:
+                print(f"  [{t['type']}] \"{t['text']}\" @ {t['position']}")
+        print()

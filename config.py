@@ -105,7 +105,7 @@ IMAGE_SPECS = {
     "output_format": "JPEG",
     "output_quality": 95,             # JPEG 质量
 
-    # 生成计划：9 张组图的类型分配
+    # 生成计划：1+7 组图（主图 + 7张辅图）
     "generation_plan": [
         {"slot": "main",            "type": "main",        "filename": "main.jpg"},
         {"slot": "PT01_lifestyle",  "type": "lifestyle",   "filename": "PT01_lifestyle.jpg"},
@@ -115,7 +115,6 @@ IMAGE_SPECS = {
         {"slot": "PT05_detail",     "type": "detail",      "filename": "PT05_detail.jpg"},
         {"slot": "PT06_detail",     "type": "detail",      "filename": "PT06_detail.jpg"},
         {"slot": "PT07_multiangle", "type": "multiangle",  "filename": "PT07_multiangle.jpg"},
-        {"slot": "PT08_multiangle", "type": "multiangle",  "filename": "PT08_multiangle.jpg"},
     ],
 }
 
