@@ -15,100 +15,12 @@ import cv2
 import numpy as np
 from PIL import Image
 
-from config import QUALITY_THRESHOLDS, VALIDATION, IMAGE_SPECS, SINGLE_IMAGE_QUALITY
-from analyzer import (
-    analyze_product_images,
-    load_image_pil, load_image_cv,
-    score_sharpness, score_resolution,
-    score_white_background, score_product_ratio,
-)
+from config import QUALITY_THRESHOLDS, VALIDATION, IMAGE_SPECS
+from analyzer import analyze_product_images
 
 logger = logging.getLogger(__name__)
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-
-
-# ============================================================
-# 单张候选图片质量验证
-# ============================================================
-
-def validate_single_image(image_path, image_type="lifestyle"):
-    """
-    验证单张候选图片的质量。
-
-    参数:
-        image_path: 图片文件路径
-        image_type: 图片类型 ("main"/"lifestyle"/"detail"/"infographic"/"multiangle")
-
-    返回:
-        {
-            "passed": bool,
-            "score": float,        # 综合得分 (0-1)
-            "details": {...},      # 各项评分明细
-            "reasons": [...]       # 未通过的原因列表
-        }
-    """
-    thresholds = SINGLE_IMAGE_QUALITY
-    reasons = []
-    details = {}
-
-    img_pil = load_image_pil(image_path)
-    img_cv = load_image_cv(image_path)
-
-    if img_pil is None or img_cv is None:
-        return {
-            "passed": False,
-            "score": 0.0,
-            "details": {},
-            "reasons": ["无法加载图片"],
-        }
-
-    # 清晰度 (1-5)
-    sharpness = score_sharpness(img_cv)
-    details["sharpness"] = sharpness
-    if sharpness < thresholds["min_sharpness"]:
-        reasons.append(f"清晰度不足: {sharpness}/5 (要求>={thresholds['min_sharpness']})")
-
-    # 分辨率 (0-10)
-    resolution, dimensions = score_resolution(img_pil)
-    details["resolution"] = resolution
-    details["dimensions"] = f"{dimensions[0]}x{dimensions[1]}"
-    if resolution < thresholds["min_resolution"]:
-        reasons.append(f"分辨率不足: {resolution}/10 (要求>={thresholds['min_resolution']})")
-
-    # 主图额外检查
-    if image_type == "main":
-        white_bg, white_ratio = score_white_background(img_cv)
-        details["white_bg"] = white_bg
-        details["white_ratio"] = white_ratio
-        if white_bg < thresholds["main_min_white_bg"]:
-            reasons.append(f"白底不达标: {white_bg}/10 (要求>={thresholds['main_min_white_bg']})")
-
-        product_ratio, ratio_val = score_product_ratio(img_cv)
-        details["product_ratio"] = product_ratio
-        details["product_ratio_val"] = ratio_val
-        if product_ratio < thresholds["main_min_product_ratio"]:
-            reasons.append(f"产品占比不足: {product_ratio}/10 (要求>={thresholds['main_min_product_ratio']})")
-
-    # 综合得分 (归一化到 0-1)
-    if image_type == "main":
-        # 主图: 清晰度(5) + 分辨率(10) + 白底(10) + 占比(10) = 满分35
-        max_score = 35.0
-        total = sharpness + resolution + details.get("white_bg", 0) + details.get("product_ratio", 0)
-    else:
-        # 辅图: 清晰度(5) + 分辨率(10) = 满分15
-        max_score = 15.0
-        total = sharpness + resolution
-
-    score = round(total / max_score, 3) if max_score > 0 else 0.0
-    details["total"] = round(total, 1)
-
-    return {
-        "passed": len(reasons) == 0,
-        "score": score,
-        "details": details,
-        "reasons": reasons,
-    }
 
 
 # ============================================================

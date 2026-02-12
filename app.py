@@ -17,13 +17,11 @@ import hmac
 import json
 import logging
 import os
-import shutil
 import subprocess
 import sys
 import time
 import uuid
 import zipfile
-from copy import deepcopy
 from concurrent.futures import ThreadPoolExecutor
 from io import BytesIO
 from typing import Dict, List, Optional
@@ -84,9 +82,8 @@ def update_job(job_id: str, **kwargs):
 # ---------------------------------------------------------------------------
 
 def _run_generation(job_id: str, photo_path: str, product_info: dict,
-                    model: str | None, output_dir: str,
-                    candidates_per_slot: int = 2):
-    """在线程池中运行的生成任务（多候选模式，自动选最佳）"""
+                    model: str | None, output_dir: str):
+    """在线程池中运行的生成任务"""
     try:
         update_job(job_id, status="generating", progress="0/8")
 
@@ -95,79 +92,48 @@ def _run_generation(job_id: str, photo_path: str, product_info: dict,
         prompt_plan = generate_prompt_plan(product_info)
         logger.info(f"[{job_id[:8]}] Prompt 计划已生成: {len(prompt_plan)} 张")
 
-        # Step 2: 为每个槽位生成 N 张候选
+        # Step 2: 逐张调用 AI 生成图片（便于更新进度）
         from image_generator import generate_product_images
-        from image_validator import validate_single_image
 
-        total_tasks = len(prompt_plan) * candidates_per_slot
+        total = len(prompt_plan)
         all_generated = []
         all_failed = []
         total_cost = 0.0
-        task_idx = 0
+        call_count = 0
 
-        for item in prompt_plan:
-            slot = item["slot"]
-            img_type = item["type"]
-            original_filename = item["filename"]
-            base_name, ext = os.path.splitext(original_filename)
+        for i, item in enumerate(prompt_plan):
+            update_job(job_id, progress=f"{i}/{total}",
+                       current_slot=item["slot"])
 
-            slot_candidates = []  # (score, candidate_filename)
+            result = generate_product_images(
+                prompt_plan=[item],
+                output_dir=output_dir,
+                source_photo=photo_path,
+                model=model,
+            )
+            all_generated.extend(result["generated"])
+            all_failed.extend(result["failed"])
+            total_cost += result["stats"]["total_cost_usd"]
+            call_count += result["stats"]["call_count"]
 
-            for c_idx in range(1, candidates_per_slot + 1):
-                task_idx += 1
-                candidate_filename = f"{base_name}_c{c_idx}{ext}"
-                update_job(job_id, progress=f"{task_idx}/{total_tasks}",
-                           current_slot=f"{slot} ({c_idx}/{candidates_per_slot})")
-
-                candidate_item = deepcopy(item)
-                candidate_item["filename"] = candidate_filename
-
-                result = generate_product_images(
-                    prompt_plan=[candidate_item],
-                    output_dir=output_dir,
-                    source_photo=photo_path,
-                    model=model,
-                )
-                all_generated.extend(result["generated"])
-                all_failed.extend(result["failed"])
-                total_cost += result["stats"]["total_cost_usd"]
-
-                # 验证候选图片质量
-                candidate_path = os.path.join(output_dir, candidate_filename)
-                if os.path.exists(candidate_path):
-                    val = validate_single_image(candidate_path, img_type)
-                    slot_candidates.append((val["score"], candidate_filename))
-                    logger.info(f"  [{slot}] 候选{c_idx} 得分 {val['score']:.2f}"
-                                f" {'PASS' if val['passed'] else 'FAIL'}")
-
-            # 自动选分数最高的候选 → 复制为最终文件名
-            if slot_candidates:
-                slot_candidates.sort(key=lambda x: x[0], reverse=True)
-                best_score, best_file = slot_candidates[0]
-                src = os.path.join(output_dir, best_file)
-                dst = os.path.join(output_dir, original_filename)
-                shutil.copy2(src, dst)
-                logger.info(f"  [{slot}] 选择 {best_file} (得分 {best_score:.2f})")
-
-        update_job(job_id, progress=f"{total_tasks}/{total_tasks}")
+        update_job(job_id, progress=f"{total}/{total}")
 
         if not all_generated:
             update_job(job_id, status="failed", error="没有成功生成任何图片")
             return
 
-        # Step 3: 质量验证（对自动选出的最终图片做整体评分）
+        # Step 3: 质量验证
         update_job(job_id, status="validating", progress="评分中...")
         from image_validator import validate_and_fix
         product_name = product_info.get("name", "product").replace(" ", "_")
         val_result = validate_and_fix(output_dir, product_name)
 
-        # 汇总最终图片（只包含最终选出的图，排除候选 _c 和 source_）
+        # 汇总生成的图片（排除上传的原图）
         files = []
         for f in sorted(os.listdir(output_dir)):
             if (f.lower().endswith((".jpg", ".jpeg", ".png"))
                     and not f.startswith("_")
-                    and not f.startswith("source_")
-                    and "_c" not in f):
+                    and not f.startswith("source_")):
                 fpath = os.path.join(output_dir, f)
                 files.append({
                     "filename": f,
@@ -204,9 +170,8 @@ async def generate(
     photos: List[UploadFile] = File(..., description="商品实拍图 (支持多张，第一张为主参考图)"),
     product_info: str = Form(..., description='商品信息 JSON'),
     model: str = Form(None, description="AI 模型: siliconflow(默认) / gpt-4o / flux"),
-    candidates_per_slot: int = Form(None, description="每个槽位生成候选数 (默认2)"),
 ):
-    """上传实拍图 + 商品信息 → 启动后台生成任务（1+7 组图，每个槽位多候选）"""
+    """上传实拍图 + 商品信息 → 启动后台生成任务（1+7 组图）"""
     # 解析 product_info JSON
     try:
         info = json.loads(product_info)
@@ -218,10 +183,6 @@ async def generate(
 
     if not photos:
         return {"error": "请至少上传一张商品实拍图"}
-
-    # 候选数量
-    from config import CANDIDATES_PER_SLOT
-    n_candidates = candidates_per_slot if candidates_per_slot and candidates_per_slot >= 1 else CANDIDATES_PER_SLOT
 
     # 创建任务
     job_id = uuid.uuid4().hex
@@ -252,18 +213,14 @@ async def generate(
             "model": model,
             "output_dir": output_dir,
             "photo_count": len(photos),
-            "candidates_per_slot": n_candidates,
             "created_at": time.time(),
         }
 
     # 提交到线程池
-    executor.submit(_run_generation, job_id, primary_photo_path, info, model,
-                    output_dir, n_candidates)
-    logger.info(f"[{job_id[:8]}] 任务已创建: {product_name} "
-                f"({len(photos)} 张原图, 每槽 {n_candidates} 候选)")
+    executor.submit(_run_generation, job_id, primary_photo_path, info, model, output_dir)
+    logger.info(f"[{job_id[:8]}] 任务已创建: {product_name} ({len(photos)} 张原图)")
 
-    return {"job_id": job_id, "status": "pending", "photo_count": len(photos),
-            "candidates_per_slot": n_candidates}
+    return {"job_id": job_id, "status": "pending", "photo_count": len(photos)}
 
 
 @app.get("/api/status/{job_id}")
@@ -342,14 +299,13 @@ async def download_all(job_id: str):
     if not os.path.isdir(output_dir):
         return {"error": "输出目录不存在"}
 
-    # 在内存中创建 ZIP（只打包最终图，不包含 source_ 原图和候选 _c 图）
+    # 在内存中创建 ZIP（只打包生成的图，不包含 source_ 原图）
     buf = BytesIO()
     with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
         for f in sorted(os.listdir(output_dir)):
             if (f.lower().endswith((".jpg", ".jpeg", ".png"))
                     and not f.startswith("_")
-                    and not f.startswith("source_")
-                    and "_c" not in f):
+                    and not f.startswith("source_")):
                 zf.write(os.path.join(output_dir, f), f)
 
     buf.seek(0)

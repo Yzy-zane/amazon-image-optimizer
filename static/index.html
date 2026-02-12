@@ -158,14 +158,6 @@
           <label>目标用户</label>
           <input id="f_audience" placeholder="如: car and SUV owners">
         </div>
-        <div class="form-group">
-          <label>每槽候选数</label>
-          <select id="f_candidates">
-            <option value="2" selected>2 张 (默认，自动选最佳)</option>
-            <option value="3">3 张</option>
-            <option value="1">1 张 (不生成候选)</option>
-          </select>
-        </div>
       </div>
 
       <!-- AI 模型选择 -->
@@ -327,13 +319,10 @@ document.getElementById('mainForm').addEventListener('submit', async (e) => {
   const aud = document.getElementById('f_audience').value.trim();
   if (aud) info.target_audience = aud;
 
-  const candidatesPerSlot = parseInt(document.getElementById('f_candidates').value) || 2;
-
   // 构建 FormData
   const fd = new FormData();
   fd.append('product_info', JSON.stringify(info));
   fd.append('model', selectedModel);
-  fd.append('candidates_per_slot', candidatesPerSlot);
   for (const f of uploadedFiles) {
     fd.append('photos', f);
   }
@@ -389,9 +378,9 @@ async function pollStatus() {
       statusEl.innerHTML = '排队中...';
       fillEl.style.width = '5%';
     } else if (data.status === 'generating') {
-      const parts = (data.progress || '0/16').split('/');
+      const parts = (data.progress || '0/8').split('/');
       const done = parseInt(parts[0]) || 0;
-      const total = parseInt(parts[1]) || 16;
+      const total = parseInt(parts[1]) || 8;
       const pct = Math.round((done / total) * 85) + 5;
       fillEl.style.width = pct + '%';
       const slotName = data.current_slot || '';
