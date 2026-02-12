@@ -87,6 +87,47 @@
   .status-text .slot { color: #ff9900; font-weight: 600; }
   .status-text.error { color: #e74c3c; }
 
+  /* 候选选择 */
+  .select-section { display: none; }
+  .select-section.show { display: block; }
+
+  .slot-group { margin-bottom: 24px; }
+  .slot-group h3 { font-size: 15px; font-weight: 600; color: #37475a; margin-bottom: 10px; }
+  .slot-group h3 .slot-type { font-size: 12px; color: #888; font-weight: 400; margin-left: 8px; }
+
+  .candidates-row { display: flex; gap: 16px; flex-wrap: wrap; }
+
+  .candidate-card {
+    width: 220px; border-radius: 10px; overflow: hidden; border: 3px solid #eee;
+    background: #fafafa; cursor: pointer; transition: all .2s; position: relative;
+  }
+  .candidate-card:hover { border-color: #ffbb55; }
+  .candidate-card.selected { border-color: #ff9900; box-shadow: 0 0 0 2px rgba(255,153,0,0.3); }
+  .candidate-card.failed-quality { opacity: 0.6; }
+  .candidate-card.failed-quality:hover { opacity: 0.85; }
+  .candidate-card.selected.failed-quality { opacity: 1; }
+
+  .candidate-card img { width: 100%; aspect-ratio: 1; object-fit: cover; display: block; background: #fff; }
+
+  .candidate-info { padding: 8px 10px; }
+  .candidate-info .score-row { display: flex; justify-content: space-between; align-items: center; }
+  .candidate-info .score-val { font-size: 14px; font-weight: 700; }
+  .candidate-info .score-val.good { color: #27ae60; }
+  .candidate-info .score-val.bad { color: #e74c3c; }
+  .candidate-info .quality-badge {
+    font-size: 10px; padding: 2px 8px; border-radius: 10px; font-weight: 600;
+  }
+  .quality-badge.pass { background: #d4edda; color: #155724; }
+  .quality-badge.fail { background: #f8d7da; color: #721c24; }
+  .candidate-info .reasons { font-size: 11px; color: #999; margin-top: 4px; }
+
+  .selected-check {
+    position: absolute; top: 8px; right: 8px; width: 24px; height: 24px;
+    background: #ff9900; border-radius: 50%; display: none;
+    align-items: center; justify-content: center; color: #fff; font-size: 14px; font-weight: 700;
+  }
+  .candidate-card.selected .selected-check { display: flex; }
+
   /* 结果 */
   .result-section { display: none; }
   .result-section.show { display: block; }
@@ -158,6 +199,14 @@
           <label>目标用户</label>
           <input id="f_audience" placeholder="如: car and SUV owners">
         </div>
+        <div class="form-group">
+          <label>每槽候选数</label>
+          <select id="f_candidates">
+            <option value="2" selected>2 张 (默认)</option>
+            <option value="3">3 张</option>
+            <option value="1">1 张 (不选择)</option>
+          </select>
+        </div>
       </div>
 
       <!-- AI 模型选择 -->
@@ -203,6 +252,19 @@
     <div class="status-text" id="statusText">准备中...</div>
   </div>
 
+  <!-- ========== 候选选择 ========== -->
+  <div class="card select-section" id="selectSection">
+    <h2>选择候选图片</h2>
+    <p style="font-size:13px; color:#888; margin-bottom:16px;">
+      每个槽位已生成多张候选，请为每个槽位选择最满意的一张。灰色候选未通过质量检查，但仍可选择。
+    </p>
+    <div class="stats" id="selectStats"></div>
+    <div id="slotsContainer"></div>
+    <div class="btn-row">
+      <button class="btn btn-primary" id="confirmSelectBtn">确认选择</button>
+    </div>
+  </div>
+
   <!-- ========== 结果 ========== -->
   <div class="card result-section" id="resultSection">
     <h2>生成结果</h2>
@@ -232,6 +294,8 @@ let selectedModel = 'siliconflow';
 let uploadedFiles = [];
 let currentJobId = null;
 let pollTimer = null;
+// 用户对每个 slot 的选择: { slot: filename }
+let userSelections = {};
 
 // ========== 模型选择 ==========
 document.querySelectorAll('.model-option').forEach(el => {
@@ -319,10 +383,13 @@ document.getElementById('mainForm').addEventListener('submit', async (e) => {
   const aud = document.getElementById('f_audience').value.trim();
   if (aud) info.target_audience = aud;
 
+  const candidatesPerSlot = parseInt(document.getElementById('f_candidates').value) || 2;
+
   // 构建 FormData
   const fd = new FormData();
   fd.append('product_info', JSON.stringify(info));
   fd.append('model', selectedModel);
+  fd.append('candidates_per_slot', candidatesPerSlot);
   for (const f of uploadedFiles) {
     fd.append('photos', f);
   }
@@ -356,6 +423,7 @@ document.getElementById('mainForm').addEventListener('submit', async (e) => {
 // ========== 进度轮询 ==========
 function showProgress() {
   document.getElementById('progressSection').classList.add('show');
+  document.getElementById('selectSection').classList.remove('show');
   document.getElementById('resultSection').classList.remove('show');
 }
 
@@ -378,20 +446,25 @@ async function pollStatus() {
       statusEl.innerHTML = '排队中...';
       fillEl.style.width = '5%';
     } else if (data.status === 'generating') {
-      const parts = (data.progress || '0/8').split('/');
+      const parts = (data.progress || '0/16').split('/');
       const done = parseInt(parts[0]) || 0;
-      const total = parseInt(parts[1]) || 8;
-      const pct = Math.round((done / total) * 85) + 5;
+      const total = parseInt(parts[1]) || 16;
+      const pct = Math.round((done / total) * 90) + 5;
       fillEl.style.width = pct + '%';
       const slotName = data.current_slot || '';
       statusEl.innerHTML = `AI 生成中 <span class="slot">${data.progress}</span>` +
         (slotName ? ` &mdash; ${slotName}` : '');
     } else if (data.status === 'validating') {
-      fillEl.style.width = '92%';
+      fillEl.style.width = '95%';
       statusEl.innerHTML = '质量评分验证中...';
+    } else if (data.status === 'selecting') {
+      fillEl.style.width = '100%';
+      statusEl.innerHTML = '生成完成! 请选择候选图片';
+      clearInterval(pollTimer);
+      loadCandidates();
     } else if (data.status === 'done') {
       fillEl.style.width = '100%';
-      statusEl.innerHTML = '生成完成!';
+      statusEl.innerHTML = '完成!';
       clearInterval(pollTimer);
       loadResults();
     } else if (data.status === 'failed') {
@@ -407,6 +480,128 @@ async function pollStatus() {
     console.error('Poll error:', err);
   }
 }
+
+// ========== 加载候选图片 ==========
+async function loadCandidates() {
+  if (!currentJobId) return;
+  const resp = await fetch(`/api/candidates/${currentJobId}`);
+  const data = await resp.json();
+  if (data.error) return;
+
+  userSelections = {};
+
+  // 统计
+  const selectStats = document.getElementById('selectStats');
+  selectStats.innerHTML = `
+    <div class="stat-item">生成 <strong>${data.generated_count}</strong> 张</div>
+    <div class="stat-item">失败 <strong>${data.failed_count}</strong> 张</div>
+    <div class="stat-item">费用 <strong>$${data.cost_usd}</strong></div>
+  `;
+
+  const container = document.getElementById('slotsContainer');
+  container.innerHTML = '';
+
+  const slotNameMap = {
+    'main': '主图 (白底)',
+    'PT01_lifestyle': '场景图 1',
+    'PT02_lifestyle': '场景图 2',
+    'PT03_infographic': '信息图 1',
+    'PT04_infographic': '信息图 2',
+    'PT05_detail': '细节图 1',
+    'PT06_detail': '细节图 2',
+    'PT07_multiangle': '多角度图',
+  };
+
+  for (const [slot, slotData] of Object.entries(data.candidates)) {
+    const group = document.createElement('div');
+    group.className = 'slot-group';
+
+    const displayName = slotNameMap[slot] || slot;
+    group.innerHTML = `<h3>${displayName}<span class="slot-type">${slotData.type}</span></h3>`;
+
+    const row = document.createElement('div');
+    row.className = 'candidates-row';
+
+    // 找出分数最高的候选作为默认选择
+    let bestCandidate = slotData.candidates[0];
+    for (const c of slotData.candidates) {
+      if (c.score > bestCandidate.score) bestCandidate = c;
+    }
+    userSelections[slot] = bestCandidate.filename;
+
+    for (const c of slotData.candidates) {
+      const card = document.createElement('div');
+      card.className = 'candidate-card';
+      if (!c.passed) card.classList.add('failed-quality');
+      if (c.filename === bestCandidate.filename) card.classList.add('selected');
+      card.dataset.slot = slot;
+      card.dataset.filename = c.filename;
+
+      const scorePct = Math.round(c.score * 100);
+      const scoreClass = c.passed ? 'good' : 'bad';
+      const badgeClass = c.passed ? 'pass' : 'fail';
+      const badgeText = c.passed ? 'PASS' : 'FAIL';
+      const reasonsText = c.reasons.length > 0 ? c.reasons.join('; ') : '';
+
+      card.innerHTML = `
+        <div class="selected-check">&#10003;</div>
+        <img src="/api/download/${currentJobId}/${c.filename}" alt="${c.filename}" loading="lazy">
+        <div class="candidate-info">
+          <div class="score-row">
+            <span class="score-val ${scoreClass}">${scorePct}%</span>
+            <span class="quality-badge ${badgeClass}">${badgeText}</span>
+          </div>
+          ${reasonsText ? `<div class="reasons">${reasonsText}</div>` : ''}
+        </div>
+      `;
+
+      card.addEventListener('click', () => {
+        // 取消同 slot 其他选中
+        row.querySelectorAll('.candidate-card').forEach(el => el.classList.remove('selected'));
+        card.classList.add('selected');
+        userSelections[slot] = c.filename;
+      });
+
+      row.appendChild(card);
+    }
+
+    group.appendChild(row);
+    container.appendChild(group);
+  }
+
+  document.getElementById('selectSection').classList.add('show');
+}
+
+// ========== 确认选择 ==========
+document.getElementById('confirmSelectBtn').addEventListener('click', async () => {
+  const btn = document.getElementById('confirmSelectBtn');
+  btn.disabled = true;
+  btn.textContent = '提交中...';
+
+  try {
+    const resp = await fetch(`/api/select/${currentJobId}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ selections: userSelections }),
+    });
+    const data = await resp.json();
+
+    if (data.error) {
+      alert('选择失败: ' + data.error);
+      btn.disabled = false;
+      btn.textContent = '确认选择';
+      return;
+    }
+
+    // 隐藏选择区域，显示结果
+    document.getElementById('selectSection').classList.remove('show');
+    loadResults();
+  } catch (err) {
+    alert('网络错误: ' + err.message);
+    btn.disabled = false;
+    btn.textContent = '确认选择';
+  }
+});
 
 // ========== 加载结果 ==========
 async function loadResults() {

@@ -93,6 +93,17 @@ VALIDATION = {
     ],
 }
 
+# 候选图片配置
+CANDIDATES_PER_SLOT = 2               # 每个槽位默认生成候选数量
+
+# 单张图片质量通过阈值
+SINGLE_IMAGE_QUALITY = {
+    "min_sharpness": 2,               # 清晰度 score >= 2/5
+    "min_resolution": 6,              # 分辨率 score >= 6/10
+    "main_min_white_bg": 6,           # 主图白底 score >= 6/10
+    "main_min_product_ratio": 4,      # 主图产品占比 score >= 4/10
+}
+
 
 # ============================================================
 # 图片生成规格
